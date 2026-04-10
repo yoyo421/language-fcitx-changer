@@ -1,0 +1,7 @@
+.{
+    .name = .language_fcitx_changer,
+    .version = "0.0.1",
+    .minimum_zig_version = "0.16.0-dev.3039+b490412cd",
+    .paths = .{""},
+    .fingerprint = 0xd13f8d1b5aced191,
+}
