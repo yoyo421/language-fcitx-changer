@@ -20,7 +20,7 @@ pub fn build(b: *std.Build) void {
     });
     langChanger.addImport("sd-bus", dbusModule);
 
-    const exe = b.addExecutable(.{ .name = "language-changer", .root_module = langChanger });
+    const exe = b.addExecutable(.{ .name = "language-changer", .root_module = langChanger, .use_llvm = true });
 
     b.installArtifact(exe);
     const exeRun = b.addRunArtifact(exe);

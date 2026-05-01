@@ -1,9 +1,10 @@
 const std = @import("std");
+
 const dbus = @import("sd-bus");
+
 const DBus = @This();
 
 const DBUS_ERROR_NULL = dbus.sd_bus_error{ .name = 0, .message = 0, ._need_free = 0 };
-const DBUS_ERROR_BUFFER = @Int(.unsigned, @bitSizeOf(dbus.sd_bus_error));
 
 // busctl --user introspect org.fcitx.Fcitx5 /controller org.fcitx.Fcitx.Controller1
 // busctl --user call org.fcitx.Fcitx5 /controller org.fcitx.Fcitx.Controller1 InputMethodGroupInfo s Default
@@ -31,13 +32,16 @@ pub const CallFunction = struct {
     params: []const *const CallFunctionParam = &[0]*const CallFunctionParam{},
     msg: ?*dbus.sd_bus_message = null,
     reply: ?*dbus.sd_bus_message = null,
-    err: dbus.sd_bus_error = @bitCast(@as(DBUS_ERROR_BUFFER, 0)),
+    err: dbus.sd_bus_error = DBUS_ERROR_NULL,
 
     pub fn deinit(self: *CallFunction) void {
-        if (dbus.sd_bus_message_is_empty(self.reply) > 0) _ = dbus.sd_bus_message_unref(self.reply);
-        if (@as(DBUS_ERROR_BUFFER, @bitCast(self.err)) != 0) dbus.sd_bus_error_free(&self.err);
+        _ = dbus.sd_bus_message_unref(self.reply);
+        _ = dbus.sd_bus_error_free(&self.err);
+        self.reply = null;
+        self.err = DBUS_ERROR_NULL;
     }
 
+    /// Reads the reply as a C string. The caller is responsible for ensuring that the reply is valid and that the string is null-terminated.
     pub fn getReplyStrC(self: *CallFunction) ![*c]const u8 {
         if (self.reply == null) return error.NoReply;
         var im_name_sential: [*c]const u8 = undefined;
@@ -45,12 +49,17 @@ pub const CallFunction = struct {
         return im_name_sential;
     }
 
+    /// Reads the reply as a Zig string. The caller is responsible for ensuring that the reply is valid and that the string is null-terminated.
     pub fn getReplyStr(self: *CallFunction) ![]const u8 {
         const im_name_sential = try self.getReplyStrC();
-        return im_name_sential[0..std.mem.indexOfSentinel(u8, 0, im_name_sential)];
+        return im_name_sential[0..std.mem.len(im_name_sential)];
     }
 };
 
+/// Calls a method on the D-Bus.
+/// The caller is responsible for ensuring that the parameters are valid and that the reply is handled properly
+///
+/// (e.g., by calling `getReplyStr` or `getReplyStrC`)
 pub fn callFn(self: *DBus, f: *CallFunction, dest: DBusDestination) void {
     var r = dbus.sd_bus_message_new_method_call(
         self.bus,

@@ -1,0 +1,20 @@
+{
+  "languages": {
+    "Zig": {
+      "code_actions_on_format": {
+        // Run code actions that currently supports adding and removing discards.
+        // "source.fixAll": true,
+        // Run code actions that sorts @import declarations.
+        // "source.organizeImports": true,
+      },
+    },
+  },
+  "lsp": {
+    "zls": {
+      "binary": {
+        // omit the following line if `zls` is in your PATH
+        "path": "./.zls/zig-out/bin/zls",
+      },
+    },
+  },
+}

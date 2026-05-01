@@ -1,6 +1,7 @@
-const std = @import("std");
-const DBus = @import("dbus.zig");
 pub const panic = @import("std").debug.no_panic;
+const std = @import("std");
+
+const DBus = @import("dbus.zig");
 
 pub const std_options: std.Options = .{ .networking = false, .allow_stack_tracing = false };
 const PROFILE_PATH = "/home/yoav/.config/fcitx5/profile";
@@ -21,15 +22,17 @@ const Group = struct {
     };
 
     pub fn addLanguage(self: *Group, language: [:0]const u8) !void {
-        if (self.languages_len >= 16) {
-            return error.TooManyLanguages;
-        }
-        const index = self.languages_len;
-        self.languages[index] = language;
+        if (self.languages_len >= 16) return error.TooManyLanguages;
+        self.languages[self.languages_len] = language;
         self.languages_len += 1;
     }
 };
 
+const ReadProfileScope = enum {
+    group,
+    language,
+    none,
+};
 fn readProfile(io: std.Io, alloc: std.mem.Allocator) !struct {
     groups: []Group,
     languages: []const u8,
@@ -46,21 +49,24 @@ fn readProfile(io: std.Io, alloc: std.mem.Allocator) !struct {
     errdefer languages.deinit(alloc);
 
     var currentGroup: ?*Group = null;
-    var currentScope: enum { group, language, none } = .none;
+    var currentScope: ReadProfileScope = .none;
     while (try reader.takeDelimiter('\n')) |line| {
         // Comment or empty line
         if (line.len == 0 or std.mem.startsWith(u8, line, "#")) continue;
         // Scope change -> group or item in group
         if (std.mem.find(u8, line, "Items") != null) {
             currentScope = .language;
+            continue;
         } else if (std.mem.find(u8, line, "Groups") != null) {
             currentGroup = groups.addOne(alloc) catch unreachable;
             currentGroup.?.* = .empty;
             currentScope = .group;
+            continue;
         }
-        if (std.mem.find(u8, line, "Name") != null and currentGroup != null) {
-            const exqualIndex = std.mem.indexOfScalar(u8, line, '=') orelse continue;
-            const name = std.mem.trim(u8, line[exqualIndex + 1 ..], " \t");
+        if (currentGroup != null) {
+            const nameIndex = std.mem.find(u8, line, "Name") orelse continue;
+            const equalIndex = std.mem.findScalarPos(u8, line, nameIndex + 4, '=') orelse continue;
+            const name = std.mem.trim(u8, line[equalIndex + 1 ..], " \t");
             switch (currentScope) {
                 .language => {
                     const index = languages.items.len;
@@ -91,9 +97,10 @@ pub fn main() !void {
     var bus: DBus = .empty;
     defer bus.deinit();
     try bus.init();
+
     var currentInputCF: DBus.CallFunction = .{ .name = "CurrentInputMethod" };
     var currentGroupCF: DBus.CallFunction = .{ .name = "CurrentInputMethodGroup" };
-    var changeCFParam = DBus.CallFunctionParam{ .mode = 's', .value = "" };
+    var changeCFParam: DBus.CallFunctionParam = .{ .mode = 's', .value = "" };
     var changeCF: DBus.CallFunction = .{ .name = "SetCurrentIM", .params = &.{&changeCFParam} };
     defer currentInputCF.deinit();
     defer currentGroupCF.deinit();
@@ -101,9 +108,9 @@ pub fn main() !void {
     bus.callFn(&currentInputCF, fcitx5Dest);
     bus.callFn(&currentGroupCF, fcitx5Dest);
 
+    const profile = try readProfile(io, alloc);
     const currentGroup = try currentGroupCF.getReplyStr();
     const currentLanguage = try currentInputCF.getReplyStr();
-    const profile = try readProfile(io, alloc);
     defer {
         alloc.free(profile.groups);
         alloc.free(profile.languages);
