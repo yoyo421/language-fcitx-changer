@@ -17,6 +17,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .single_threaded = true,
+        .strip = optimize != .Debug,
     });
     langChanger.addImport("sd-bus", dbusModule);
 

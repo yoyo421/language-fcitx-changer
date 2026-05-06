@@ -1,6 +1,6 @@
-pub const panic = @import("std").debug.no_panic;
 const std = @import("std");
 
+const isProd = @import("builtin").mode != .Debug;
 const DBus = @import("dbus.zig");
 
 pub const std_options: std.Options = .{ .networking = false, .allow_stack_tracing = false };
@@ -13,7 +13,7 @@ const fcitx5Dest = DBus.DBusDestination{
 
 const Group = struct {
     name: []const u8,
-    languages: [16][:0]const u8,
+    languages: [16][]const u8,
     languages_len: u8 = 0,
 
     pub const empty = Group{
@@ -21,7 +21,7 @@ const Group = struct {
         .languages = undefined,
     };
 
-    pub fn addLanguage(self: *Group, language: [:0]const u8) !void {
+    pub fn addLanguage(self: *Group, language: []const u8) error{TooManyLanguages}!void {
         if (self.languages_len >= 16) return error.TooManyLanguages;
         self.languages[self.languages_len] = language;
         self.languages_len += 1;
@@ -35,18 +35,17 @@ const ReadProfileScope = enum {
 };
 fn readProfile(io: std.Io, alloc: std.mem.Allocator) !struct {
     groups: []Group,
-    languages: []const u8,
+    mmapbuffer: []align(std.heap.pageSize()) const u8,
 } {
     const path = try std.fs.path.resolve(alloc, &[_][]const u8{PROFILE_PATH});
+    defer alloc.free(path);
     const file = try std.Io.Dir.openFileAbsolute(io, path, .{ .mode = .read_only });
     defer file.close(io);
-    const fcitxMap = try std.posix.mmap(null, try file.length(io), .{ .READ = true }, .{ .TYPE = .PRIVATE }, file.handle, 0);
-    defer std.posix.munmap(fcitxMap);
+    const fcitxMap: []align(std.heap.pageSize()) u8 = try std.posix.mmap(null, try file.length(io), .{ .READ = true }, .{ .TYPE = .PRIVATE }, file.handle, 0);
+    errdefer std.posix.munmap(fcitxMap);
     var reader = std.Io.Reader.fixed(fcitxMap);
     var groups: std.ArrayList(Group) = .empty;
     errdefer groups.deinit(alloc);
-    var languages: std.ArrayList(u8) = .empty;
-    errdefer languages.deinit(alloc);
 
     var currentGroup: ?*Group = null;
     var currentScope: ReadProfileScope = .none;
@@ -63,34 +62,29 @@ fn readProfile(io: std.Io, alloc: std.mem.Allocator) !struct {
             currentScope = .group;
             continue;
         }
-        if (currentGroup != null) {
+        if (currentGroup) |g| {
             const nameIndex = std.mem.find(u8, line, "Name") orelse continue;
             const equalIndex = std.mem.findScalarPos(u8, line, nameIndex + 4, '=') orelse continue;
             const name = std.mem.trim(u8, line[equalIndex + 1 ..], " \t");
             switch (currentScope) {
-                .language => {
-                    const index = languages.items.len;
-                    languages.appendSlice(alloc, name) catch unreachable;
-                    languages.append(alloc, 0) catch unreachable;
-                    currentGroup.?.addLanguage(@ptrCast(languages.items[index..])) catch unreachable;
-                },
-                .group => {
-                    currentGroup.?.name = alloc.dupe(u8, name) catch unreachable;
-                },
+                .language => try g.addLanguage(name),
+                .group => g.name = name,
                 else => {},
             }
         }
     }
 
     return .{
-        .groups = groups.items,
-        .languages = languages.items,
+        .groups = try groups.toOwnedSlice(alloc),
+        .mmapbuffer = fcitxMap,
     };
 }
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    const alloc = arena.allocator();
+    var debug = std.heap.DebugAllocator(.{}).init;
+    defer _ = if (isProd) arena.deinit() else debug.deinit();
+    const alloc = if (isProd) arena.allocator() else debug.allocator();
     var thread = std.Io.Threaded.init_single_threaded;
     const io = thread.io();
 
@@ -113,13 +107,14 @@ pub fn main() !void {
     const currentLanguage = try currentInputCF.getReplyStr();
     defer {
         alloc.free(profile.groups);
-        alloc.free(profile.languages);
+        std.posix.munmap(profile.mmapbuffer);
     }
     for (profile.groups) |group| {
         if (!std.mem.eql(u8, group.name, currentGroup)) continue;
         for (group.languages[0..group.languages_len], 0..) |language, i| {
-            if (!std.mem.eql(u8, language[0 .. language.len - 1], currentLanguage)) continue;
-            changeCFParam.value = group.languages[(i + 1) % group.languages_len];
+            if (!std.mem.eql(u8, language, currentLanguage)) continue;
+            changeCFParam.value = try std.mem.concat(alloc, u8, &[_][]const u8{ group.languages[(i + 1) % group.languages_len], "" });
+            defer alloc.free(changeCFParam.value);
             bus.callFn(&changeCF, fcitx5Dest);
             return;
         }
