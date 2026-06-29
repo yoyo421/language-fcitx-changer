@@ -22,10 +22,15 @@ pub fn build(b: *std.Build) void {
     langChanger.addImport("sd-bus", dbusModule);
 
     const exe = b.addExecutable(.{ .name = "language-changer", .root_module = langChanger, .use_llvm = true });
+    const tests = b.addTest(.{ .root_module = langChanger, .use_llvm = true });
+    const testRun = b.addRunArtifact(tests);
 
     b.installArtifact(exe);
     const exeRun = b.addRunArtifact(exe);
 
     const runStep = b.step("run", "Run the language changer executable");
     runStep.dependOn(&exeRun.step);
+
+    const testStep = b.step("test", "Run language changer tests");
+    testStep.dependOn(&testRun.step);
 }
